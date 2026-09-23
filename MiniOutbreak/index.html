@@ -1,0 +1,277 @@
+<!doctype html>
+<!--
+  Page shell for the browser build. Replaces the stock love.js template, which
+  ships an <h1>, a footer credit and a fixed-size canvas that gets cropped.
+
+  Two values are substituted by tools/build_web.py before this is written out:
+    MiniOutbreak         the window title
+    536870912 the WASM heap size, which must match what love.js was built with
+
+  What this adds over the stock template:
+    - the canvas fills the viewport and follows resizes and orientation changes
+    - touch-action:none, so the browser does not steal touches for scroll/zoom
+    - viewport-fit=cover, so love.window.getSafeArea() reports real notch insets
+    - a device-pixel-ratio cap, so a phone does not render at 3x and crawl
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14160f">
+<title>MiniOutbreak</title>
+<style>
+  :root { color-scheme: dark; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #14160f;
+    /* Kill the gestures a game never wants: pull-to-refresh, rubber-band
+       scroll, double-tap zoom, and long-press text selection. */
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    outline: none;
+    border: 0;
+    touch-action: none;
+    /* Pixel art: never let the browser smooth it when the backbuffer is
+       scaled to CSS pixels. */
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: #14160f;
+    color: #8b9178;
+    font: 500 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: opacity 260ms ease;
+    z-index: 10;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+
+  #bar {
+    width: min(240px, 60vw);
+    height: 2px;
+    background: #2a2f22;
+    overflow: hidden;
+  }
+  #bar > i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: #8b9178;
+    transition: width 200ms ease;
+  }
+
+  #error {
+    position: fixed;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 24px;
+    background: #2a0a0c;
+    color: #ffd9dc;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow: auto;
+    z-index: 20;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+
+<div id="loading">
+  <div id="status">Loading</div>
+  <div id="bar"><i></i></div>
+</div>
+
+<div id="error"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var canvas   = document.getElementById("canvas");
+  var loading  = document.getElementById("loading");
+  var statusEl = document.getElementById("status");
+  var barFill  = document.querySelector("#bar > i");
+  var errorEl  = document.getElementById("error");
+
+  // A 3x device pixel ratio on a phone means rendering ~3x the pixels for no
+  // visible gain on pixel art. Cap it.
+  var MAX_DPR = 2;
+
+  function viewportSize() {
+    // visualViewport tracks the area actually visible once a mobile browser's
+    // address bar has collapsed; innerWidth/Height lag behind it.
+    var vv = window.visualViewport;
+    return {
+      w: Math.max(1, Math.floor(vv ? vv.width : window.innerWidth)),
+      h: Math.max(1, Math.floor(vv ? vv.height : window.innerHeight)),
+    };
+  }
+
+  function resize() {
+    var size = viewportSize();
+    var dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    var w = Math.floor(size.w * dpr);
+    var h = Math.floor(size.h * dpr);
+
+    if (canvas.width !== w || canvas.height !== h) {
+      // Setting the backbuffer size is what the game sees through
+      // love.graphics.getDimensions(); the CSS size keeps it filling the page.
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = size.w + "px";
+      canvas.style.height = size.h + "px";
+    }
+  }
+
+  resize();
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", function () {
+    // Orientation reports the new size a beat after the event.
+    setTimeout(resize, 120);
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", resize);
+  }
+
+  // Browsers start every AudioContext suspended and only allow it to resume
+  // inside a real user gesture. The game's own audio gate cannot do this from
+  // Lua -- the context lives on the JS side, inside SDL -- so the page has to
+  // lift it, on the first gesture of any kind, and then stop listening.
+  function unlockAudio() {
+    try {
+      var sdl = window.Module && window.Module.SDL2;
+      var ctx = sdl && sdl.audioContext;
+      if (ctx && ctx.state === "suspended") ctx.resume();
+    } catch (e) { /* no audio context yet, or none at all */ }
+  }
+  ["pointerdown", "touchstart", "keydown"].forEach(function (type) {
+    window.addEventListener(type, unlockAudio, { once: false, passive: true });
+  });
+
+  // Keyboard input needs the canvas focused, and a fresh page load does not
+  // focus it on its own.
+  function focusCanvas() { try { canvas.focus(); } catch (e) {} }
+  window.addEventListener("load", focusCanvas);
+  window.addEventListener("pointerdown", focusCanvas);
+
+  // Stop the arrow keys scrolling anything out from under the game.
+  //
+  // SPACE IS DELIBERATELY NOT IN THIS LIST. preventDefault on a keydown also
+  // cancels the character event that follows it, so guarding space stopped the
+  // browser build from being able to TYPE a space -- which made the debug
+  // console unusable, since every command that takes an argument needs one.
+  // Nothing is lost by dropping it: html and body are overflow:hidden, so the
+  // page cannot scroll in the first place and there is no default to prevent.
+  window.addEventListener("keydown", function (e) {
+    if ([37, 38, 39, 40].indexOf(e.keyCode) !== -1) e.preventDefault();
+  }, false);
+
+  // Belt and braces on top of touch-action:none.
+  ["touchstart", "touchmove", "touchend"].forEach(function (type) {
+    canvas.addEventListener(type, function (e) { e.preventDefault(); },
+                            { passive: false });
+  });
+
+  function showError(message) {
+    errorEl.textContent = String(message);
+    errorEl.style.display = "flex";
+    loading.classList.add("done");
+  }
+
+  // EVERY fetched file carries the build stamp, so a plain refresh picks up a
+  // rebuild. Without it the browser holds on to an 11 MB game.data for as long
+  // as it likes, and rebuilding looks like it did nothing -- which is exactly
+  // what it looked like.
+  //
+  // locateFile is what Emscripten asks for the package and wasm URLs
+  // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
+  window.Module = {
+    locateFile: function (path) { return path + "?v=" + "125b0a7c85e5"; },
+    arguments: ["./game.love"],
+    INITIAL_MEMORY: 536870912,
+    canvas: canvas,
+    printErr: function () {
+      var text = Array.prototype.join.call(arguments, " ");
+      console.error(text);
+    },
+    print: function () {
+      console.log(Array.prototype.join.call(arguments, " "));
+    },
+    totalDependencies: 0,
+    remainingDependencies: 0,
+
+    setStatus: function (text) {
+      if (text) {
+        statusEl.textContent = text;
+      } else if (Module.remainingDependencies === 0) {
+        barFill.style.width = "100%";
+        loading.classList.add("done");
+        // Re-assert the size once the runtime owns the canvas: love.js sets it
+        // from conf.lua's window size, which is not the viewport.
+        setTimeout(function () { resize(); focusCanvas(); }, 60);
+        setTimeout(resize, 400);
+      }
+    },
+
+    monitorRunDependencies: function (left) {
+      this.remainingDependencies = left;
+      this.totalDependencies = Math.max(this.totalDependencies, left);
+      var done = this.totalDependencies - left;
+      if (this.totalDependencies > 0) {
+        barFill.style.width = (100 * done / this.totalDependencies) + "%";
+      }
+      Module.setStatus(left ? "Loading " + done + "/" + this.totalDependencies : "");
+    },
+  };
+
+  Module.setStatus("Loading");
+
+  window.onerror = function (message) {
+    showError("Something went wrong.\n\n" + message +
+              "\n\nSee the browser console for the full trace.");
+  };
+
+  canvas.addEventListener("webglcontextlost", function (e) {
+    e.preventDefault();
+    showError("The graphics context was lost. Reload the page to continue.");
+  }, false);
+
+  window.applicationLoad = function () { Love(Module); };
+})();
+</script>
+
+<script src="game.js?v=125b0a7c85e5"></script>
+<script async src="love.js?v=125b0a7c85e5" onload="applicationLoad()"></script>
+</body>
+</html>
