@@ -3,15 +3,23 @@
   Page shell for the browser build. Replaces the stock love.js template, which
   ships an <h1>, a footer credit and a fixed-size canvas that gets cropped.
 
-  Two values are substituted by tools/build_web.py before this is written out:
-    MiniOutbreak         the window title
+  Three values are substituted by tools/build_web.py before this is written out:
+    MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
+    b33df43236fa          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
-    - the canvas fills the viewport and follows resizes and orientation changes
+    - the canvas fills the viewport and follows resizes, orientation changes
+      and a new pixel ratio, and LOVE is told the size it boots at, even on a
+      phone that never turns
     - touch-action:none, so the browser does not steal touches for scroll/zoom
-    - viewport-fit=cover, so love.window.getSafeArea() reports real notch insets
+    - viewport-fit=cover, so the canvas runs under a notch. love.js does NOT
+      report the insets: love.window.getSafeArea() is the whole window here
+      (LOVE 11.4 reads them only on iOS and Android; Progress 18.3.2)
     - a device-pixel-ratio cap, so a phone does not render at 3x and crawl
+    - audio started on the first gesture the browser counts, a finger's included
+    - the save directory copied to IndexedDB as the game plays, not only when
+      the page is left the way a desktop leaves it
 -->
 <html lang="en">
 <head>
@@ -22,6 +30,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#14160f">
 <title>MiniOutbreak</title>
+<!-- No icon, said out loud: without this line every load asks the server for
+     /favicon.ico and logs its 404 as a console error, which is the one error
+     a clean boot printed. -->
+<link rel="icon" href="data:,">
 <style>
   :root { color-scheme: dark; }
 
@@ -126,7 +138,44 @@
 
   // A 3x device pixel ratio on a phone means rendering ~3x the pixels for no
   // visible gain on pixel art. Cap it.
+  //
+  // CAP IT WHERE THE RUNTIME LOOKS, not only here. SDL, inside love.js, reads
+  // devicePixelRatio for itself and makes it LOVE's DPI scale, so it sizes its
+  // frame by the real ratio whatever this page does to the canvas. The cap
+  // used to be applied only to canvas.width below, and on any phone past 2x
+  // the two disagreed: at 844x390 and 3x, LOVE drew a 2532x1170 frame into a
+  // 1688x780 buffer and the page showed its bottom-left two thirds -- the
+  // menu cut in half, the whole HUD off the edge, taps landing on things drawn
+  // somewhere else. Every capture had been at 1x or 2x, where the two agree.
+  //
+  // So the cap is installed on window.devicePixelRatio itself, before love.js
+  // runs, and resize() reads that same property: one number for both. Should a
+  // browser refuse the override, both read the real ratio -- uncapped, but
+  // still the same.
+  //
+  // "No visible gain" is not settled for TEXT. Capped at 2, a 3x phone
+  // stretches the frame 1.5x, nearest, and label strokes come out uneven;
+  // uncapped they land 1:1 and read cleaner (compared at 844x390, 3x). Raising
+  // this number is the whole change, once a phone has shown what 3x costs.
   var MAX_DPR = 2;
+  // The ratio the screen really has, cap or no cap: what a media query on the
+  // resolution matches (followRatio, below).
+  var realRatio = function () { return window.devicePixelRatio || 1; };
+  (function capPixelRatio() {
+    var owner = window, real = null;
+    while (owner && !(real = Object.getOwnPropertyDescriptor(owner, "devicePixelRatio"))) {
+      owner = Object.getPrototypeOf(owner);
+    }
+    if (!real || !real.get) return;
+    realRatio = function () { return real.get.call(window) || 1; };
+    try {
+      Object.defineProperty(window, "devicePixelRatio", {
+        configurable: true,
+        enumerable: true,
+        get: function () { return Math.min(real.get.call(window) || 1, MAX_DPR); },
+      });
+    } catch (e) { /* left as it was: see above */ }
+  })();
 
   function viewportSize() {
     // visualViewport tracks the area actually visible once a mobile browser's
@@ -138,45 +187,147 @@
     };
   }
 
+  // Size the canvas to the viewport: its CSS box, and its buffer at the capped
+  // ratio. Returns whether anything changed.
+  //
+  // The CSS box is compared as well as the buffer. Zoomed to 125%, a 1280x720
+  // window is 1024x576 CSS pixels at a ratio of 1.25 -- the SAME 1280x720
+  // buffer -- and a check on the buffer alone left the box 1280 wide, hanging
+  // off the page, for SDL to read back as the window's size.
   function resize() {
     var size = viewportSize();
-    var dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    var dpr = window.devicePixelRatio || 1;   // already capped, see above
     var w = Math.floor(size.w * dpr);
     var h = Math.floor(size.h * dpr);
+    var cssW = size.w + "px", cssH = size.h + "px";
 
-    if (canvas.width !== w || canvas.height !== h) {
-      // Setting the backbuffer size is what the game sees through
-      // love.graphics.getDimensions(); the CSS size keeps it filling the page.
-      canvas.width = w;
-      canvas.height = h;
-      canvas.style.width = size.w + "px";
-      canvas.style.height = size.h + "px";
-    }
+    if (canvas.width === w && canvas.height === h &&
+        canvas.style.width === cssW && canvas.style.height === cssH) return false;
+    // Only what differs: setting a WebGL canvas's size, even to the size it
+    // has, throws its drawing buffer away.
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    canvas.style.width = cssW;
+    canvas.style.height = cssH;
+    return true;
   }
 
+  // THE GAME HEARS OF A NEW SIZE IN ONE WAY ONLY: SDL's own listener for the
+  // window's resize event. It reads the canvas's CSS box back, sizes the
+  // buffer from it, and hands LOVE the resize -- love.graphics.getDimensions()
+  // and love.resize both come from there, never from canvas.width. Anything
+  // else that changes the canvas leaves LOVE drawing a frame of the old size
+  // into a buffer of the new one: the page shows the frame's bottom-left
+  // corner, the HUD off the edge, taps landing on things drawn elsewhere --
+  // until the next real resize, which on a phone is the next rotation.
+  //
+  // This page changes it at other moments too: on visualViewport's resize,
+  // which a phone sends on its own when its bars move, and which is free to
+  // arrive after the window's; 120 ms after an orientationchange; and on a
+  // new pixel ratio, which comes with no resize at all (followRatio).
+  //
+  // So every change, whatever asked for it, is followed by a resize event on
+  // the window -- SDL's cue. Inside a real resize event that nests a second
+  // one, which SDL answers and this listener finds nothing to do for; the
+  // outer event then reaches SDL with nothing new, which it drops. Which of
+  // the two listeners runs first stops mattering too. What SDL does to the
+  // canvas in answer is not news to the watcher below, and is taken back out
+  // of its queue: were the two ever to round a size differently, they would
+  // otherwise hand it back and forth for good.
+  function fit() {
+    if (!resize()) return;
+    window.dispatchEvent(new Event("resize"));
+    if (watcher) watcher.takeRecords();
+  }
+
+  // SDL SIZES THE CANVAS ITSELF, TOO, and tells this page nothing. It makes
+  // the window in the game's first animation frame, clamped to conf.lua's
+  // minimum, 480 wide, with the buffer sized to match -- so loaded upright,
+  // LOVE drew a 480-wide rotate prompt into a 390-wide page, off centre and
+  // cut off, every tap in it scaled by the wrong width. (SDL applies the
+  // minimum only when a size is SET; the size a resize event brings is taken
+  // as it is, so fit() puts it right.) No moment after boot can be counted on
+  // to come after that frame -- a tab loaded behind another runs its timers
+  // but no frame until it is brought forward -- so whatever sets the canvas's
+  // size, whenever it does, is answered: its size attributes are watched.
+  var watcher = null;
   resize();
-  window.addEventListener("resize", resize);
+  if (window.MutationObserver) {
+    watcher = new MutationObserver(function () { fit(); });
+    watcher.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+  }
+  window.addEventListener("resize", fit);
   window.addEventListener("orientationchange", function () {
     // Orientation reports the new size a beat after the event.
-    setTimeout(resize, 120);
+    setTimeout(fit, 120);
   });
   if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", resize);
+    window.visualViewport.addEventListener("resize", fit);
   }
 
-  // Browsers start every AudioContext suspended and only allow it to resume
-  // inside a real user gesture. The game's own audio gate cannot do this from
-  // Lua -- the context lives on the JS side, inside SDL -- so the page has to
-  // lift it, on the first gesture of any kind, and then stop listening.
+  // A NEW PIXEL RATIO IN THE SAME CSS BOX fires no resize: a window dragged to
+  // a denser monitor. The buffer stayed at the old ratio, and LOVE at a DPI
+  // scale of 1 on a 2x screen -- nothing cut off, but every pixel doubled and
+  // soft. A media query on the ratio in force is the one signal for it; it
+  // holds for that ratio only, so each change asks again at the new one. SDL
+  // reads the new ratio at the resize event fit() sends, and passes it on.
+  (function followRatio() {
+    if (!window.matchMedia) return;
+    var query = window.matchMedia("(resolution: " + realRatio() + "dppx)");
+    function changed() {
+      if (query.removeEventListener) query.removeEventListener("change", changed);
+      else query.removeListener(changed);
+      fit();
+      followRatio();
+    }
+    if (query.addEventListener) query.addEventListener("change", changed);
+    else query.addListener(changed);
+  })();
+
+  // Browsers start every AudioContext suspended and let it resume only once
+  // the page has user activation, which Lua cannot ask for -- so the page does.
+  //
+  // THE CONTEXT IS OPENAL'S, and the page has to catch it being made. LOVE's
+  // sound goes through Emscripten's OpenAL, which makes its own AudioContext;
+  // SDL's audio is never opened here (Module.SDL2 stays empty), and SDL's is
+  // where this page used to look, so for a long time it resumed nothing.
+  // Emscripten does resume OpenAL's context itself, ONCE, on the first
+  // keydown, mousedown or touchstart. For a finger that is too early: touch
+  // activation arrives at touchend (pointerup), so the touchstart resume is
+  // refused -- logged as "The AudioContext was not allowed to start" -- and
+  // nothing asks again. Chromium starts the context anyway the next time the
+  // game starts a sound; nothing says Safari does.
+  //
+  // So every context is kept as it is made -- the constructor wrapped here,
+  // before love.js loads -- and any that is not running is resumed on every
+  // gesture that can carry activation: pointerdown and keydown for a mouse and
+  // keys, pointerup and touchend for a finger. Never removed, so a context a
+  // phone suspends later is asked again too; a gesture without activation is
+  // skipped where the browser can say so, since asking then is only refused.
+  var audioContexts = [];
+  ["AudioContext", "webkitAudioContext"].forEach(function (name) {
+    var Real = window[name];
+    if (typeof Real !== "function") return;
+    var Kept = function (options) {
+      var ctx = arguments.length ? new Real(options) : new Real();
+      audioContexts.push(ctx);
+      return ctx;
+    };
+    Kept.prototype = Real.prototype;
+    window[name] = Kept;
+  });
   function unlockAudio() {
-    try {
-      var sdl = window.Module && window.Module.SDL2;
-      var ctx = sdl && sdl.audioContext;
-      if (ctx && ctx.state === "suspended") ctx.resume();
-    } catch (e) { /* no audio context yet, or none at all */ }
+    if (navigator.userActivation && !navigator.userActivation.isActive) return;
+    audioContexts.forEach(function (ctx) {
+      if (ctx.state === "running" || ctx.state === "closed") return;
+      try {
+        var started = ctx.resume();
+        if (started && started.catch) started.catch(function () {});
+      } catch (e) { /* refused: the next gesture asks again */ }
+    });
   }
-  ["pointerdown", "touchstart", "keydown"].forEach(function (type) {
-    window.addEventListener(type, unlockAudio, { once: false, passive: true });
+  ["pointerdown", "pointerup", "touchend", "keydown"].forEach(function (type) {
+    window.addEventListener(type, unlockAudio, { capture: true, passive: true });
   });
 
   // Keyboard input needs the canvas focused, and a fresh page load does not
@@ -203,6 +354,107 @@
                             { passive: false });
   });
 
+  // THE SAVE DIRECTORY REACHES INDEXEDDB ONLY WHEN SOMETHING ASKS. love.js
+  // keeps it in memory and copies it out in exactly one place, its own
+  // beforeunload listener -- so settings.lua and every run save lived only in
+  // memory until the page was left the way a desktop leaves it. Measured in
+  // Chromium: three seconds after a toggle IndexedDB was still empty, and a tab
+  // closed without beforeunload came back with neither setting. That is how a
+  // phone ends a page: a backgrounded tab is discarded without one, and iOS
+  // Safari is documented not to fire it at all (not seen here: no WebKit).
+  // Even a reload is a race. The copy is two trips to IndexedDB, and a reload
+  // can tear the page down before the second one commits: with the CPU slowed
+  // six times, a reload 800 ms after a toggle lost it 2 times in 5.
+  //
+  // So the page asks for the same copy itself, at four moments:
+  //   - a frame after a tap or click ends. A setting, and a save from the
+  //     menu, is written in the frame that handles the input, and a frame
+  //     callback asked for now runs after that frame's step -- the runtime
+  //     queues each step at the end of the one before -- so the copy sees the
+  //     write. A toggle then outlived a killed renderer 300 ms later, and
+  //     800 ms later on a CPU slowed six times; before, only a tick that
+  //     happened to land in between saved it. Inside that window -- a frame
+  //     and a copy -- a reload is still the race above.
+  //   - every two seconds while the game is on screen, for what no tap
+  //     writes: the autosave.
+  //   - at once when the page leaves the screen, the last moment a phone
+  //     reliably gives.
+  //   - at beforeunload, in place of love.js's own listener.
+  // A copy that finds nothing changed reads a few keys and writes nothing.
+  //
+  // ONE AT A TIME. Two in flight only do the work twice, but love.js says so
+  // through printErr, as a console error, and on a slow CPU a copy outlasts
+  // any fixed gap between them. A copy runs for exactly as long as the save
+  // database has a transaction open -- one to read, then one to write, begun
+  // before the first ends -- so the page counts those, and a copy asked for
+  // meanwhile runs the moment the count is back to zero. Held, never dropped:
+  // it may carry a write the running one began too early to see.
+  //
+  // IndexedDB is shared by every tab, and IDBFS knows nothing of that: a copy
+  // makes it match THIS tab's memory. With the game open twice, the tab
+  // without a save deletes the other's new save at its next copy, and the
+  // other writes it back at its own. That happened before too, when a tab was
+  // left; now it happens within seconds.
+  //
+  // The copy is love.js's own listener, taken as love.js hands it to
+  // addEventListener (applicationLoad below): the one beforeunload listener
+  // whose body calls syncfs. NOT by firing beforeunload at the page: SDL
+  // listens for it too, as the page closing, and one synthetic beforeunload
+  // left the game deaf to every click and key, with nothing in the log.
+  //
+  // NEVER before love.js has read the directory back in. The copy makes
+  // IndexedDB match memory, deletions included, so over a directory not yet
+  // read back it would erase every save there. calledRun with no dependency
+  // left is that moment: the read-back is a dependency (IDBFS_sync), added in
+  // the same breath the listener is.
+  var SAVE_DB = "/home/web_user/love";   // IDBFS names it after the mount point
+  var copySaves = null;
+  var copyOpen = 0;         // transactions open on SAVE_DB: a copy is running
+  var copyWanted = false;   // ...and another was asked for meanwhile
+  function persistSaves() {
+    if (!copySaves || !Module.calledRun || Module.remainingDependencies !== 0) return;
+    if (copyOpen > 0) { copyWanted = true; return; }
+    copyWanted = false;
+    copySaves();
+  }
+  (function countCopies() {
+    var proto = window.IDBDatabase && window.IDBDatabase.prototype;
+    if (!proto || !proto.transaction) return;
+    var begin = proto.transaction;
+    proto.transaction = function () {
+      var tx = begin.apply(this, arguments);
+      if (this.name === SAVE_DB) {
+        var ended = false;
+        var end = function () {
+          if (ended) return;
+          ended = true;
+          // A task later, not now: love.js counts its copy done in its own
+          // oncomplete, which runs after this listener.
+          if (--copyOpen === 0 && copyWanted) setTimeout(persistSaves, 0);
+        };
+        copyOpen++;
+        tx.addEventListener("complete", end);
+        tx.addEventListener("abort", end);
+      }
+      return tx;
+    };
+  })();
+  var frameAsked = false;
+  function persistAfterInput() {
+    if (frameAsked) return;
+    frameAsked = true;
+    requestAnimationFrame(function () { frameAsked = false; persistSaves(); });
+  }
+  ["pointerup", "touchend"].forEach(function (type) {
+    window.addEventListener(type, persistAfterInput, { capture: true, passive: true });
+  });
+  setInterval(function () {
+    if (document.visibilityState !== "hidden") persistSaves();
+  }, 2000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") persistSaves();
+  });
+
   function showError(message) {
     errorEl.textContent = String(message);
     errorEl.style.display = "flex";
@@ -217,7 +469,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "125b0a7c85e5"; },
+    locateFile: function (path) { return path + "?v=" + "b33df43236fa"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -237,10 +489,9 @@
       } else if (Module.remainingDependencies === 0) {
         barFill.style.width = "100%";
         loading.classList.add("done");
-        // Re-assert the size once the runtime owns the canvas: love.js sets it
-        // from conf.lua's window size, which is not the viewport.
-        setTimeout(function () { resize(); focusCanvas(); }, 60);
-        setTimeout(resize, 400);
+        // No size to re-assert here: the window is made later, in the first
+        // animation frame, and the watcher answers it then.
+        setTimeout(focusCanvas, 60);
       }
     },
 
@@ -267,11 +518,27 @@
     showError("The graphics context was lost. Reload the page to continue.");
   }, false);
 
-  window.applicationLoad = function () { Love(Module); };
+  // love.js mounts the save directory and adds its beforeunload copy inside
+  // this one synchronous call, so addEventListener is watched for exactly as
+  // long as the call lasts. The copy is kept, and persistSaves goes on the
+  // page in its place, so that the copy at unload waits its turn like any
+  // other. SDL adds its own beforeunload handler later, when main opens the
+  // window, and its body does not call syncfs anyway.
+  window.applicationLoad = function () {
+    var add = window.addEventListener;
+    window.addEventListener = function (type, fn) {
+      if (type === "beforeunload" && typeof fn === "function" && /syncfs/.test(String(fn))) {
+        copySaves = fn;
+        return add.call(this, type, function () { persistSaves(); });
+      }
+      return add.apply(this, arguments);
+    };
+    try { Love(Module); } finally { window.addEventListener = add; }
+  };
 })();
 </script>
 
-<script src="game.js?v=125b0a7c85e5"></script>
-<script async src="love.js?v=125b0a7c85e5" onload="applicationLoad()"></script>
+<script src="game.js?v=b33df43236fa"></script>
+<script async src="love.js?v=b33df43236fa" onload="applicationLoad()"></script>
 </body>
 </html>
