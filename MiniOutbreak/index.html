@@ -6,7 +6,7 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    d6f6b3f03506          a hash of the shipped files, so a rebuild is never served from cache
+    05fb50fb8afd          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
     - the canvas fills the viewport and follows resizes, orientation changes
@@ -474,7 +474,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "d6f6b3f03506"; },
+    locateFile: function (path) { return path + "?v=" + "05fb50fb8afd"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -546,7 +546,7 @@
 })();
 </script>
 
-<script src="game.js?v=d6f6b3f03506"></script>
-<script async src="love.js?v=d6f6b3f03506" onload="applicationLoad()"></script>
+<script src="game.js?v=05fb50fb8afd"></script>
+<script async src="love.js?v=05fb50fb8afd" onload="applicationLoad()"></script>
 </body>
 </html>
