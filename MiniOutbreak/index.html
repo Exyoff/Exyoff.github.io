@@ -6,7 +6,7 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    b33df43236fa          a hash of the shipped files, so a rebuild is never served from cache
+    d6f6b3f03506          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
     - the canvas fills the viewport and follows resizes, orientation changes
@@ -18,8 +18,8 @@
       (LOVE 11.4 reads them only on iOS and Android; Progress 18.3.2)
     - a device-pixel-ratio cap, so a phone does not render at 3x and crawl
     - audio started on the first gesture the browser counts, a finger's included
-    - the save directory copied to IndexedDB as the game plays, not only when
-      the page is left the way a desktop leaves it
+    - the save directory copied to IndexedDB whenever the game writes to it,
+      not only when the page is left the way a desktop leaves it
 -->
 <html lang="en">
 <head>
@@ -366,21 +366,30 @@
   // can tear the page down before the second one commits: with the CPU slowed
   // six times, a reload 800 ms after a toggle lost it 2 times in 5.
   //
-  // So the page asks for the same copy itself, at four moments:
-  //   - a frame after a tap or click ends. A setting, and a save from the
-  //     menu, is written in the frame that handles the input, and a frame
-  //     callback asked for now runs after that frame's step -- the runtime
-  //     queues each step at the end of the one before -- so the copy sees the
-  //     write. A toggle then outlived a killed renderer 300 ms later, and
-  //     800 ms later on a CPU slowed six times; before, only a tick that
-  //     happened to land in between saved it. Inside that window -- a frame
-  //     and a copy -- a reload is still the race above.
-  //   - every two seconds while the game is on screen, for what no tap
-  //     writes: the autosave.
+  // So the page asks for the same copy itself, at three moments:
+  //   - a frame after the game writes to the save directory. It says so: in
+  //     the browser every successful write, append, delete or new directory
+  //     through love.filesystem prints SAVES_WRITTEN (src/core/persist.lua),
+  //     which Module.print below takes out before the console sees it. The
+  //     line comes out inside the very frame that wrote, and a frame callback
+  //     asked for then runs after that frame's step -- the runtime queues each
+  //     step at the end of the one before -- so the copy sees the write. A
+  //     toggle outlives a renderer killed 300 ms later, and 800 ms later on a
+  //     CPU slowed six times. Inside that window -- a frame and a copy -- a
+  //     reload is still the race above.
   //   - at once when the page leaves the screen, the last moment a phone
   //     reliably gives.
   //   - at beforeunload, in place of love.js's own listener.
-  // A copy that finds nothing changed reads a few keys and writes nothing.
+  //
+  // NOT ON A CLOCK, AND NOT ON EVERY TAP, which is how it began: a copy
+  // every two seconds for the autosave, and one a frame after every tap in
+  // case the tap had written a setting -- thirty copies a minute and one per
+  // FIRE, for a game that writes every three minutes. A copy that finds
+  // nothing changed still reads every key back from IndexedDB, and measured
+  // with the CPU at a phone's pace the frame a copy landed in ran over 20 ms
+  // nearly twice as often as frames in general, and over 34 ms two to three
+  // times as often. That was part of the stutter (Progress 20.6). Now a copy
+  // happens only when there is something to copy.
   //
   // ONE AT A TIME. Two in flight only do the work twice, but love.js says so
   // through printErr, as a console error, and on a slow CPU a copy outlasts
@@ -394,7 +403,7 @@
   // makes it match THIS tab's memory. With the game open twice, the tab
   // without a save deletes the other's new save at its next copy, and the
   // other writes it back at its own. That happened before too, when a tab was
-  // left; now it happens within seconds.
+  // left; now it happens at the next thing either tab writes.
   //
   // The copy is love.js's own listener, taken as love.js hands it to
   // addEventListener (applicationLoad below): the one beforeunload listener
@@ -439,18 +448,14 @@
       return tx;
     };
   })();
+  // What the game prints when it has written: see src/core/persist.lua.
+  var SAVES_WRITTEN = "@@minioutbreak-saves-written@@";
   var frameAsked = false;
-  function persistAfterInput() {
+  function persistAfterWrite() {
     if (frameAsked) return;
     frameAsked = true;
     requestAnimationFrame(function () { frameAsked = false; persistSaves(); });
   }
-  ["pointerup", "touchend"].forEach(function (type) {
-    window.addEventListener(type, persistAfterInput, { capture: true, passive: true });
-  });
-  setInterval(function () {
-    if (document.visibilityState !== "hidden") persistSaves();
-  }, 2000);
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "hidden") persistSaves();
   });
@@ -469,7 +474,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "b33df43236fa"; },
+    locateFile: function (path) { return path + "?v=" + "d6f6b3f03506"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -478,7 +483,10 @@
       console.error(text);
     },
     print: function () {
-      console.log(Array.prototype.join.call(arguments, " "));
+      var text = Array.prototype.join.call(arguments, " ");
+      // The game's word that it wrote a save or a setting: a copy, not a log.
+      if (text === SAVES_WRITTEN) return persistAfterWrite();
+      console.log(text);
     },
     totalDependencies: 0,
     remainingDependencies: 0,
@@ -538,7 +546,7 @@
 })();
 </script>
 
-<script src="game.js?v=b33df43236fa"></script>
-<script async src="love.js?v=b33df43236fa" onload="applicationLoad()"></script>
+<script src="game.js?v=d6f6b3f03506"></script>
+<script async src="love.js?v=d6f6b3f03506" onload="applicationLoad()"></script>
 </body>
 </html>
