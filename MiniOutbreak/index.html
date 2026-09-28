@@ -6,17 +6,22 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    52f439028c2d          a hash of the shipped files, so a rebuild is never served from cache
+    16b315359abc          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
-    - the canvas fills the viewport and follows resizes, orientation changes
-      and a new pixel ratio, and LOVE is told the size it boots at, even on a
-      phone that never turns
+    - the canvas is pinned to the visible viewport's top-left at its size,
+      follows resizes, orientation changes, a scrolled visible viewport and a
+      new pixel ratio, and LOVE is told the size it boots at, even on a phone
+      that never turns
     - touch-action:none, so the browser does not steal touches for scroll/zoom
     - viewport-fit=cover, so the canvas runs under a notch. love.js does NOT
       report the insets: love.window.getSafeArea() is the whole window here
       (LOVE 11.4 reads them only on iOS and Android; Progress 18.3.2)
-    - a device-pixel-ratio cap, so a phone does not render at 3x and crawl
+    - a device-pixel-ratio cap, so a phone does not render at 3x and crawl,
+      and ?dpr= on the address to try another without a rebuild
+    - a frame's time taken from the display, not from when its callback ran
+    - fullscreen asked for on a phone's first touch, and a manifest and meta
+      tags, so the browser's own bars do not take the top of the screen
     - audio started on the first gesture the browser counts, a finger's included
     - the save directory copied to IndexedDB whenever the game writes to it,
       not only when the page is left the way a desktop leaves it
@@ -29,14 +34,37 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#14160f">
+<!-- Added to a home screen, the game opens with no browser bars: fullscreen
+     and sideways on Android (the manifest, which tools/build_web.py writes
+     beside this page with its icons), and on an iPhone with the status bar
+     drawn over the game rather than above it. The bars taking the top of a
+     phone held sideways is one reading of "the top pushed down" (Progress
+     26.5); the first touch asks for fullscreen too, below. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MiniOutbreak">
+<link rel="manifest" href="manifest.webmanifest?v=16b315359abc">
+<link rel="apple-touch-icon" href="icon-192.png?v=16b315359abc">
 <title>MiniOutbreak</title>
-<!-- No icon, said out loud: without this line every load asks the server for
-     /favicon.ico and logs its 404 as a console error, which is the one error
-     a clean boot printed. -->
-<link rel="icon" href="data:,">
+<!-- The icon named, said out loud: without a line for it every load asks the
+     server for /favicon.ico and logs its 404 as a console error, which was
+     the one error a clean boot printed. -->
+<link rel="icon" href="icon-192.png?v=16b315359abc">
 <style>
   :root { color-scheme: dark; }
 
+  /* NOTHING IN THE PAGE'S FLOW, SO NOTHING TO SCROLL. The canvas used to
+     sit in the body's flow at the document's top-left, sized to the visible
+     viewport by the script below -- right only while the document's top-left
+     IS the visible one and the body is at least that tall. A phone's
+     browser can break both (Progress 26.5): Chrome keeps html's 100% at its
+     height with the address bar showing when the bar slides away, so the
+     body's overflow would cut the canvas's bottom off; iOS lays out more than
+     it shows and scrolls the visible part inside it; and a browser scrolls
+     even an overflow:hidden page to tuck its bars away or bring a focused
+     element into view, sliding the game up under the bar over a band of bare
+     page. Fixed, the body is the viewport and holds nothing in flow, and the
+     canvas is placed where the visible viewport is, whatever the document
+     does. tools/web_layout.cjs models each of these. */
   html, body {
     margin: 0;
     padding: 0;
@@ -53,9 +81,13 @@
     -webkit-touch-callout: none;
     -webkit-tap-highlight-color: transparent;
   }
+  body { position: fixed; inset: 0; }
 
   #canvas {
     display: block;
+    position: fixed;
+    left: 0;
+    top: 0;
     width: 100%;
     height: 100%;
     outline: none;
@@ -158,6 +190,15 @@
   // uncapped they land 1:1 and read cleaner (compared at 844x390, 3x). Raising
   // this number is the whole change, once a phone has shown what 3x costs.
   var MAX_DPR = 2;
+  // ...or what the address asks for: ?dpr=1 draws a quarter of the pixels,
+  // ?dpr=3 a 3x phone's own. For trying on a phone what its GPU makes of
+  // the fill (Progress 26.5), which no software GPU here can say.
+  (function askedRatio() {
+    try {
+      var asked = +new URLSearchParams(window.location.search).get("dpr");
+      if (asked >= 0.5 && asked <= 4) MAX_DPR = asked;
+    } catch (e) { /* no URLSearchParams: the cap stands */ }
+  })();
   // The ratio the screen really has, cap or no cap: what a media query on the
   // resolution matches (followRatio, below).
   var realRatio = function () { return window.devicePixelRatio || 1; };
@@ -177,38 +218,101 @@
     } catch (e) { /* left as it was: see above */ }
   })();
 
-  function viewportSize() {
-    // visualViewport tracks the area actually visible once a mobile browser's
-    // address bar has collapsed; innerWidth/Height lag behind it.
-    var vv = window.visualViewport;
-    return {
-      w: Math.max(1, Math.floor(vv ? vv.width : window.innerWidth)),
-      h: Math.max(1, Math.floor(vv ? vv.height : window.innerHeight)),
+  // THE FRAME'S CLOCK. LOVE times a frame by reading the clock when the
+  // frame's callback runs, and in a browser that lands late after its frame
+  // began by however long whatever ran first took -- a touch handled, a task
+  // of the page's, a phone's slow main thread. The frames still reach the
+  // screen on the display's beat, so the world, moved by the clock's dt, moved
+  // unevenly across frames the eye saw as even. Measured in phone emulation
+  // (Progress 26.5): animation frames exactly 16.7 or 33.3 ms apart, and
+  // LOVE's dt anywhere from 12 to 42 ms over them.
+  //
+  // So inside an animation-frame callback the clock reads the frame's own
+  // timestamp -- the display's time for it, which is what the browser hands
+  // the callback -- plus the time since the callback began. LOVE's dt is then
+  // the display's interval to within the few hundred microseconds LOVE takes
+  // to get to its timer, and everything timed inside a frame still reads
+  // real time passing. Outside a callback the clock is the real one. It can
+  // step back by a few milliseconds from an event handled late in one frame
+  // to the start of the next; nothing here measures across that gap but
+  // SDL's event stamps, which LOVE ignores.
+  //
+  // Installed before love.js loads: Emscripten asks performance.now afresh
+  // on every read of its clock (_emscripten_get_now), which LOVE's timer
+  // reaches through clock_gettime.
+  (function frameClock() {
+    var perf = window.performance;
+    var raf = window.requestAnimationFrame;
+    if (!perf || typeof perf.now !== "function" || typeof raf !== "function") return;
+    var real = perf.now.bind(perf);
+    var stamp = -1, began = 0;
+    perf.now = function () {
+      return stamp < 0 ? real() : stamp + (real() - began);
     };
+    raf = raf.bind(window);
+    // One wrapper per callback, kept: the runtime's main loop and settle()
+    // below hand the same function every frame, and a wrapper made per call
+    // was two closures a frame for the collector.
+    var framed = typeof WeakMap === "function" ? new WeakMap() : null;
+    window.requestAnimationFrame = function (callback) {
+      var run = framed && framed.get(callback);
+      if (!run) {
+        run = function (timestamp) {
+          stamp = timestamp;
+          began = real();
+          try { callback(timestamp); } finally { stamp = -1; }
+        };
+        if (framed && typeof callback === "function") framed.set(callback, run);
+      }
+      return raf(run);
+    };
+  })();
+
+  // The visible viewport: its size, and where it lies inside the layout one.
+  // visualViewport tracks the area actually visible once a mobile browser's
+  // address bar has collapsed; innerWidth/Height lag behind it. It is also
+  // the one thing that says where the visible part is: iOS lays out more than
+  // it shows and scrolls the shown part inside it (offsetTop), and a canvas
+  // at the layout's top-left then starts above the screen.
+  //
+  // Read into file locals rather than a fresh object: the page checks this
+  // every frame (see settle below), and a frame should hand the browser's
+  // collector nothing.
+  var seenW = 0, seenH = 0, seenX = 0, seenY = 0;
+  function viewportSize() {
+    var vv = window.visualViewport;
+    seenW = Math.max(1, Math.floor(vv ? vv.width : window.innerWidth));
+    seenH = Math.max(1, Math.floor(vv ? vv.height : window.innerHeight));
+    seenX = vv ? vv.offsetLeft : 0;
+    seenY = vv ? vv.offsetTop : 0;
   }
 
-  // Size the canvas to the viewport: its CSS box, and its buffer at the capped
-  // ratio. Returns whether anything changed.
+  // Size the canvas to the visible viewport and put it there: its CSS box,
+  // its place, and its buffer at the capped ratio. Returns whether the SIZE
+  // changed; a move alone is nothing SDL needs to hear of, since it reads the
+  // canvas's place afresh for every touch and click.
   //
   // The CSS box is compared as well as the buffer. Zoomed to 125%, a 1280x720
   // window is 1024x576 CSS pixels at a ratio of 1.25 -- the SAME 1280x720
   // buffer -- and a check on the buffer alone left the box 1280 wide, hanging
   // off the page, for SDL to read back as the window's size.
+  var placedX = null, placedY = null, sizedW = 0, sizedH = 0;
   function resize() {
-    var size = viewportSize();
-    var dpr = window.devicePixelRatio || 1;   // already capped, see above
-    var w = Math.floor(size.w * dpr);
-    var h = Math.floor(size.h * dpr);
-    var cssW = size.w + "px", cssH = size.h + "px";
+    viewportSize();
+    if (seenX !== placedX) { placedX = seenX; canvas.style.left = seenX + "px"; }
+    if (seenY !== placedY) { placedY = seenY; canvas.style.top = seenY + "px"; }
 
-    if (canvas.width === w && canvas.height === h &&
-        canvas.style.width === cssW && canvas.style.height === cssH) return false;
+    var dpr = window.devicePixelRatio || 1;   // already capped, see above
+    var w = Math.floor(seenW * dpr);
+    var h = Math.floor(seenH * dpr);
+    if (canvas.width === w && canvas.height === h && sizedW === seenW && sizedH === seenH) return false;
     // Only what differs: setting a WebGL canvas's size, even to the size it
     // has, throws its drawing buffer away.
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
-    canvas.style.width = cssW;
-    canvas.style.height = cssH;
+    sizedW = seenW; sizedH = seenH;
+    canvas.style.width = seenW + "px";
+    canvas.style.height = seenH + "px";
     return true;
   }
 
@@ -223,8 +327,9 @@
   //
   // This page changes it at other moments too: on visualViewport's resize,
   // which a phone sends on its own when its bars move, and which is free to
-  // arrive after the window's; 120 ms after an orientationchange; and on a
-  // new pixel ratio, which comes with no resize at all (followRatio).
+  // arrive after the window's; on a size that changed with no event at all
+  // (settle, below); and on a new pixel ratio, which comes with no resize
+  // either (followRatio).
   //
   // So every change, whatever asked for it, is followed by a resize event on
   // the window -- SDL's cue. Inside a real resize event that nests a second
@@ -257,13 +362,90 @@
     watcher.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
   }
   window.addEventListener("resize", fit);
-  window.addEventListener("orientationchange", function () {
-    // Orientation reports the new size a beat after the event.
-    setTimeout(fit, 120);
-  });
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", fit);
+    window.visualViewport.addEventListener("scroll", fit);
   }
+
+  // A PHONE'S BROWSER DOES NOT ALWAYS SAY WHEN ITS VIEWPORT CHANGED. Its
+  // numbers can land after the event that announces them -- a turn reports
+  // the new size a beat after orientationchange, which this page used to
+  // wait 120 ms for -- or with no event at all, and a page that sized itself
+  // at load from numbers not yet settled kept them: a canvas taller than what
+  // is visible, the game centred below the middle of the screen and its
+  // bottom cut off -- the top pushed down, which a load in landscape can
+  // show and a turn cannot, since a turn brings events that put it right. So
+  // the page looks every frame. When nothing moved -- every frame but the one
+  // that matters -- that is four numbers read and compared, and nothing made.
+  // (The CSS size is compared as this page last set it, not read back: SDL
+  // sets it only for a canvas with no size of its own, which this never is.)
+  //
+  // AND THE PAGE IS NEVER LEFT SCROLLED. Nothing in it can scroll now (the
+  // style above), but a browser can still scroll the document itself, to tuck
+  // its bars away or show a focused element, and an overflow:hidden page
+  // keeps whatever it is given.
+  function unscroll() {
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  }
+  window.addEventListener("scroll", unscroll, { passive: true });
+  (function settle() {
+    fit();
+    unscroll();
+    requestAnimationFrame(settle);
+  })();
+
+  // THE BROWSER'S OWN BARS. Held sideways, a phone's 390 px lose 56 or more
+  // to the address bar and tab strip at the top, and the game is drawn under
+  // them -- which reads as the top pushed down, and which no layout of the
+  // page can take back (Progress 26.5). Only fullscreen can. So the page asks
+  // for it on the first touch it is given, a gesture being the one moment a
+  // page may ask, and then locks the turn to landscape where the browser lets
+  // it (Android's, in fullscreen); a refusal of either is let be. Once a
+  // load: a player who leaves fullscreen is not pulled back in. Never for a
+  // mouse, nor on a device whose main pointer is not a finger -- a desktop,
+  // a laptop with a touch screen. An iPhone has no fullscreen for a page at
+  // all; Add to Home Screen, with the manifest and the meta tags above, is
+  // its way out of the bars, and on Android it opens with none as well.
+  //
+  // SDL MUST NOT HEAR OF IT. Emscripten's SDL takes a fullscreenchange it did
+  // not ask for as its window gone fullscreen, and from then on drops every
+  // resize (Emscripten_HandleResize skips a fullscreen window): the canvas
+  // would grow to the whole screen with LOVE still drawing the old size into
+  // it -- bottom-anchored, a band across the top, 8.7's bug again. The page
+  // owns fullscreen, so the event stops at the window, before SDL's listener
+  // on the document, and the canvas is fitted to what the change made
+  // visible, told to SDL as every resize is. tools/web_layout.cjs checks both.
+  (function fullscreenOnTouch() {
+    var root = document.documentElement;
+    var request = root.requestFullscreen || root.webkitRequestFullscreen;
+    var asked = false;
+    function lockTurn() {
+      try {
+        var turned = screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape");
+        if (turned && turned.catch) turned.catch(function () {});
+      } catch (e) { /* no lock here: the rotate prompt stands */ }
+    }
+    function ask() {
+      if (asked || !request) return;
+      if (!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
+      asked = true;
+      // Opened from the home screen it has no bars to hide already.
+      if (window.matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches) return;
+      if (document.fullscreenElement || document.webkitFullscreenElement) return;
+      try {
+        var going = root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" })
+                                           : root.webkitRequestFullscreen();
+        if (going && going.then) going.then(lockTurn, function () {});
+        else lockTurn();
+      } catch (e) { /* refused: the bars stay, as they always did */ }
+    }
+    // touchend is where a finger's activation lands, and the game's own
+    // handlers still get the touch: nothing here stops or cancels it.
+    window.addEventListener("touchend", ask, { capture: true, passive: true });
+    ["fullscreenchange", "webkitfullscreenchange"].forEach(function (type) {
+      window.addEventListener(type, function (e) { e.stopImmediatePropagation(); fit(); }, true);
+    });
+  })();
 
   // A NEW PIXEL RATIO IN THE SAME CSS BOX fires no resize: a window dragged to
   // a denser monitor. The buffer stayed at the old ratio, and LOVE at a DPI
@@ -332,7 +514,9 @@
 
   // Keyboard input needs the canvas focused, and a fresh page load does not
   // focus it on its own.
-  function focusCanvas() { try { canvas.focus(); } catch (e) {} }
+  // Without scrolling: focus() brings the element into view, and a canvas a
+  // moment out of step with a turn is taller than the view.
+  function focusCanvas() { try { canvas.focus({ preventScroll: true }); } catch (e) {} }
   window.addEventListener("load", focusCanvas);
   window.addEventListener("pointerdown", focusCanvas);
 
@@ -474,7 +658,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "52f439028c2d"; },
+    locateFile: function (path) { return path + "?v=" + "16b315359abc"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -546,7 +730,7 @@
 })();
 </script>
 
-<script src="game.js?v=52f439028c2d"></script>
-<script async src="love.js?v=52f439028c2d" onload="applicationLoad()"></script>
+<script src="game.js?v=16b315359abc"></script>
+<script async src="love.js?v=16b315359abc" onload="applicationLoad()"></script>
 </body>
 </html>
