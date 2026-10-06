@@ -6,7 +6,7 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    634f98a2c65f          a hash of the shipped files, so a rebuild is never served from cache
+    79df1b448522          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
     - the canvas is pinned to the visible viewport's top-left at its size,
@@ -42,13 +42,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=634f98a2c65f">
-<link rel="apple-touch-icon" href="icon-192.png?v=634f98a2c65f">
+<link rel="manifest" href="manifest.webmanifest?v=79df1b448522">
+<link rel="apple-touch-icon" href="icon-192.png?v=79df1b448522">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=634f98a2c65f">
+<link rel="icon" href="icon-192.png?v=79df1b448522">
 <style>
   :root { color-scheme: dark; }
 
@@ -658,7 +658,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "634f98a2c65f"; },
+    locateFile: function (path) { return path + "?v=" + "79df1b448522"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -730,7 +730,7 @@
 })();
 </script>
 
-<script src="game.js?v=634f98a2c65f"></script>
-<script async src="love.js?v=634f98a2c65f" onload="applicationLoad()"></script>
+<script src="game.js?v=79df1b448522"></script>
+<script async src="love.js?v=79df1b448522" onload="applicationLoad()"></script>
 </body>
 </html>
