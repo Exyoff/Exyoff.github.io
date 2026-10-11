@@ -6,7 +6,7 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    79df1b448522          a hash of the shipped files, so a rebuild is never served from cache
+    d2fd42198025          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
     - the canvas is pinned to the visible viewport's top-left at its size,
@@ -42,13 +42,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=79df1b448522">
-<link rel="apple-touch-icon" href="icon-192.png?v=79df1b448522">
+<link rel="manifest" href="manifest.webmanifest?v=d2fd42198025">
+<link rel="apple-touch-icon" href="icon-192.png?v=d2fd42198025">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=79df1b448522">
+<link rel="icon" href="icon-192.png?v=d2fd42198025">
 <style>
   :root { color-scheme: dark; }
 
@@ -493,10 +493,74 @@
     var Kept = function (options) {
       var ctx = arguments.length ? new Real(options) : new Real();
       audioContexts.push(ctx);
+      hrtfPanners(ctx);
       return ctx;
     };
     Kept.prototype = Real.prototype;
     window[name] = Kept;
+  });
+
+  // THE ORIGINAL'S PANNER. Its Audio plugin sends every sound placed in the
+  // world through a PannerNode with the HRTF model (data.js t187), its ears
+  // 600 px over the ground: a sound 300 px to the side is 2.2 dB louder in
+  // the near ear, and nothing is ever in one ear alone. Emscripten's OpenAL
+  // makes a PannerNode for every mono Source too, but sets it "equalpower"
+  // unless the context was asked for HRTF, which LOVE does not ask, and
+  // nothing in Lua can: equal-power is 4.2 dB at the same place, and a
+  // centred sound through it is 3 dB under what it is through HRTF. So every
+  // panner this context makes is HRTF, and stays it -- OpenAL writes the
+  // model again whenever it touches a Source's distance settings, and that
+  // write is held to HRTF here. Where the game places them is
+  // src/core/audio.lua's (the 600 below the ears, as the original's).
+  function hrtfPanners(ctx) {
+    var make = ctx.createPanner;
+    var Node = window.PannerNode;
+    var model = Node && Object.getOwnPropertyDescriptor(Node.prototype, "panningModel");
+    if (typeof make !== "function" || !model || !model.get || !model.set) return;
+    ctx.createPanner = function () {
+      var panner = make.apply(ctx, arguments);
+      try {
+        model.set.call(panner, "HRTF");
+        Object.defineProperty(panner, "panningModel", {
+          configurable: true,
+          get: function () { return model.get.call(panner); },
+          set: function () { model.set.call(panner, "HRTF"); },
+        });
+      } catch (e) { /* left as OpenAL makes it: equal-power, still not one ear */ }
+      return panner;
+    };
+  }
+
+  // A HIDDEN PAGE IS SILENT, as the original's is: its Audio plugin, with
+  // "Play in background" off, pauses every sound and suspends its context
+  // when the page is hidden, and resumes both when it shows (audio#6). The
+  // game cannot do it from Lua in time -- a hidden page runs no frames, so it
+  // hears of the hide only when the page is back (src/app.lua, app.visible,
+  // which pauses its Sources then and lets them play on). So the contexts
+  // that are running when the
+  // page hides are suspended here, at that moment, and those alone resumed
+  // when it shows: one never unlocked stays for a gesture to unlock.
+  var hiddenSuspended = [];
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      audioContexts.forEach(function (ctx) {
+        if (ctx.state !== "running") return;
+        hiddenSuspended.push(ctx);
+        try {
+          var stopped = ctx.suspend();
+          if (stopped && stopped.catch) stopped.catch(function () {});
+        } catch (e) { /* no suspend: it plays on, as it did */ }
+      });
+      return;
+    }
+    var held = hiddenSuspended;
+    hiddenSuspended = [];
+    held.forEach(function (ctx) {
+      try {
+        var started = ctx.resume();
+        if (started && started.catch) started.catch(function () {});
+      } catch (e) { /* refused: the next gesture asks again (unlockAudio) */ }
+    });
   });
   function unlockAudio() {
     if (navigator.userActivation && !navigator.userActivation.isActive) return;
@@ -658,7 +722,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "79df1b448522"; },
+    locateFile: function (path) { return path + "?v=" + "d2fd42198025"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -730,7 +794,7 @@
 })();
 </script>
 
-<script src="game.js?v=79df1b448522"></script>
-<script async src="love.js?v=79df1b448522" onload="applicationLoad()"></script>
+<script src="game.js?v=d2fd42198025"></script>
+<script async src="love.js?v=d2fd42198025" onload="applicationLoad()"></script>
 </body>
 </html>
