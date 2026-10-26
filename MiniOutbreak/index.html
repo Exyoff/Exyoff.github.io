@@ -6,7 +6,7 @@
   Three values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    4fdbd21dc90e          a hash of the shipped files, so a rebuild is never served from cache
+    f514d9c6bbee          a hash of the shipped files, so a rebuild is never served from cache
 
   What this adds over the stock template:
     - the canvas is pinned to the visible viewport's top-left at its size,
@@ -33,7 +33,7 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#14160f">
+<meta name="theme-color" content="#000000">
 <!-- Added to a home screen, the game opens with no browser bars: fullscreen
      and sideways on Android (the manifest, which tools/build_web.py writes
      beside this page with its icons), and on an iPhone with the status bar
@@ -42,13 +42,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=4fdbd21dc90e">
-<link rel="apple-touch-icon" href="icon-192.png?v=4fdbd21dc90e">
+<link rel="manifest" href="manifest.webmanifest?v=f514d9c6bbee">
+<link rel="apple-touch-icon" href="icon-192.png?v=f514d9c6bbee">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=4fdbd21dc90e">
+<link rel="icon" href="icon-192.png?v=f514d9c6bbee">
 <style>
   :root { color-scheme: dark; }
 
@@ -71,7 +71,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #14160f;
+    background: #000000;
     /* Kill the gestures a game never wants: pull-to-refresh, rubber-band
        scroll, double-tap zoom, and long-press text selection. */
     overscroll-behavior: none;
@@ -107,8 +107,10 @@
     align-items: center;
     justify-content: center;
     gap: 14px;
-    background: #14160f;
-    color: #8b9178;
+    /* Black and white since the user's "remake the portrait and downloading
+       screen. black background and white text" (2026-10-25). */
+    background: #000000;
+    color: #ffffff;
     font: 500 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -120,14 +122,14 @@
   #bar {
     width: min(240px, 60vw);
     height: 2px;
-    background: #2a2f22;
+    background: #333333;
     overflow: hidden;
   }
   #bar > i {
     display: block;
     height: 100%;
     width: 0%;
-    background: #8b9178;
+    background: #ffffff;
     transition: width 200ms ease;
   }
 
@@ -722,7 +724,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "4fdbd21dc90e"; },
+    locateFile: function (path) { return path + "?v=" + "f514d9c6bbee"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -794,7 +796,7 @@
 })();
 </script>
 
-<script src="game.js?v=4fdbd21dc90e"></script>
-<script async src="love.js?v=4fdbd21dc90e" onload="applicationLoad()"></script>
+<script src="game.js?v=f514d9c6bbee"></script>
+<script async src="love.js?v=f514d9c6bbee" onload="applicationLoad()"></script>
 </body>
 </html>
