@@ -6,7 +6,7 @@
   Four values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    99839a0dadcc          a hash of the shipped files, so a rebuild is never served from cache
+    9c5fc767bcf4          a hash of the shipped files, so a rebuild is never served from cache
     __KEEP__           those files and their SHA-256s, for the offline copy (sw.js)
 
   What this adds over the stock template:
@@ -48,13 +48,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=99839a0dadcc">
-<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png?v=99839a0dadcc">
+<link rel="manifest" href="manifest.webmanifest?v=9c5fc767bcf4">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png?v=9c5fc767bcf4">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=99839a0dadcc">
+<link rel="icon" href="icon-192.png?v=9c5fc767bcf4">
 <style>
   :root { color-scheme: dark; }
 
@@ -745,7 +745,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "99839a0dadcc"; },
+    locateFile: function (path) { return path + "?v=" + "9c5fc767bcf4"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -836,8 +836,8 @@
   // LAN at http://<ip>:8080; only localhost is let off), a private window in
   // Firefox -- nothing changes: the game loads from the network as it always
   // did.
-  var BUILD = "99839a0dadcc";
-  var KEEP = [{"url": "game.data?v=99839a0dadcc", "sha256": "891669d652172eeaaf778deaaeb3a4651e1ca9ef4d921df098f094ceffd14400"}, {"url": "love.wasm?v=99839a0dadcc", "sha256": "ecc9e098bb8af918d20fbe3f26d23495c5184ff6b5d203d2e4b27bf17a771d6f"}, {"url": "love.js?v=99839a0dadcc", "sha256": "12db012a5cf4e0661f9eaf154c4c10c3cba7a7db31e6a36856028bbaf5f942f0"}, {"url": "game.js?v=99839a0dadcc", "sha256": "0d71c8a4cbd89196998d611271e4897e5f170b2fa37a20b8f7790d0d85167b82"}, {"url": "manifest.webmanifest?v=99839a0dadcc", "sha256": "1db6379813c09bd162d8d20a8fcbc17cbab70b2d71d6bd57fecaaa136003ec43"}, {"url": "icon-180.png?v=99839a0dadcc", "sha256": "a80c84237d85a8a32187242d206e68cccee1497c592e9a220292f907e171733e"}, {"url": "icon-192.png?v=99839a0dadcc", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-192.png?v=c41226cb90f1", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-512.png?v=b6b28b0a6bdc", "sha256": "b6b28b0a6bdc85ea61cd1f3a7bca480a513b3d1a99169df705fff0ebfc13fba3"}];
+  var BUILD = "9c5fc767bcf4";
+  var KEEP = [{"url": "game.data?v=9c5fc767bcf4", "sha256": "26c2d3ba7055e7cb96293c76ec04c329d91a387cdd575022aaa574e88623c641"}, {"url": "love.wasm?v=9c5fc767bcf4", "sha256": "ecc9e098bb8af918d20fbe3f26d23495c5184ff6b5d203d2e4b27bf17a771d6f"}, {"url": "love.js?v=9c5fc767bcf4", "sha256": "12db012a5cf4e0661f9eaf154c4c10c3cba7a7db31e6a36856028bbaf5f942f0"}, {"url": "game.js?v=9c5fc767bcf4", "sha256": "d12827700bf3c53b2366d719f27aab9d8123ddc39748ac6d954ecf0843fe1aaa"}, {"url": "manifest.webmanifest?v=9c5fc767bcf4", "sha256": "1db6379813c09bd162d8d20a8fcbc17cbab70b2d71d6bd57fecaaa136003ec43"}, {"url": "icon-180.png?v=9c5fc767bcf4", "sha256": "a80c84237d85a8a32187242d206e68cccee1497c592e9a220292f907e171733e"}, {"url": "icon-192.png?v=9c5fc767bcf4", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-192.png?v=c41226cb90f1", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-512.png?v=b6b28b0a6bdc", "sha256": "b6b28b0a6bdc85ea61cd1f3a7bca480a513b3d1a99169df705fff0ebfc13fba3"}];
   function keepOffline() {
     var workers = navigator.serviceWorker;
     if (workers) {
@@ -960,7 +960,7 @@
 })();
 </script>
 
-<script src="game.js?v=99839a0dadcc"></script>
-<script async src="love.js?v=99839a0dadcc" onload="applicationLoad()"></script>
+<script src="game.js?v=9c5fc767bcf4"></script>
+<script async src="love.js?v=9c5fc767bcf4" onload="applicationLoad()"></script>
 </body>
 </html>
