@@ -24,10 +24,13 @@
 // never booted, never takes the place of the one that did.
 //
 // THE PAGE COMES FROM THE NETWORK FIRST, so a phone that is online opens the
-// newest build, as it did before this; from the kept build when the network
-// fails, or has not answered in PAGE_WAIT -- a connection that is up and
-// carries nothing hangs a fetch for a minute. The kept page asks for the kept
-// build's files only, and every one of them is here.
+// newest build, as it did before this -- asked of the site every time, never
+// the browser's own copy of it, which GitHub Pages lets it keep ten minutes
+// (2026-10-27: "check for updates if online"): a conditional request, nothing
+// sent back when the page has not changed. From the kept build when the
+// network fails, or has not answered in PAGE_WAIT -- a connection that is up
+// and carries nothing hangs a fetch for a minute. The kept page asks for the
+// kept build's files only, and every one of them is here.
 //
 // A file of a build is answered from whichever cache holds it, and from the
 // network when none does. Anything without a ?v=, and anything not this
@@ -55,10 +58,11 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
-    // The page's request sent while this worker starts, not after: a phone
-    // can take a few hundred milliseconds to start one.
+    // No navigation preload: its request takes the browser's own copy of the
+    // page while it is fresh, which is what the page is asked afresh to
+    // avoid. One an earlier copy of this file turned on, turned off.
     if (self.registration.navigationPreload) {
-      try { await self.registration.navigationPreload.enable(); } catch (e) { /* asked for afresh */ }
+      try { await self.registration.navigationPreload.disable(); } catch (e) { /* left as it was */ }
     }
     await self.clients.claim();
   })());
@@ -91,11 +95,10 @@ function wait(ms) {
 }
 
 async function openPage(event) {
-  const network = Promise.resolve(event.preloadResponse)
-    .then((preloaded) => preloaded || fetch(event.request));
-  // Never left to dangle: a preload nobody waits on is cancelled, with a
-  // warning in the console.
-  event.waitUntil(network.catch(() => {}));
+  // A preload an older copy of this file turned on is waited out, so it is
+  // not cancelled with a warning, and not used.
+  if (event.preloadResponse) event.waitUntil(Promise.resolve(event.preloadResponse).catch(() => {}));
+  const network = fetch(event.request.url, { cache: "no-cache", credentials: "same-origin" });
   const answer = await Promise.race([network.catch(() => null), wait(PAGE_WAIT).then(() => null)]);
   if (answer && answer.ok) return answer;
   const kept = await keptPage();

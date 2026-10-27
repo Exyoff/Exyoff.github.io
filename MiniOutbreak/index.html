@@ -6,7 +6,7 @@
   Four values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    9c6f6a65ca04          a hash of the shipped files, so a rebuild is never served from cache
+    99839a0dadcc          a hash of the shipped files, so a rebuild is never served from cache
     __KEEP__           those files and their SHA-256s, for the offline copy (sw.js)
 
   What this adds over the stock template:
@@ -28,6 +28,9 @@
       not only when the page is left the way a desktop leaves it
     - the game kept for offline play by a service worker, sw.js beside this,
       once it has run online, and opened from it with no network
+    - a newer build looked for while online, and gone to when found: the run
+      saved first, and carried on in the new build
+    - the turn locked to landscape wherever a browser lets a page lock it
 -->
 <html lang="en">
 <head>
@@ -45,13 +48,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=9c6f6a65ca04">
-<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png?v=9c6f6a65ca04">
+<link rel="manifest" href="manifest.webmanifest?v=99839a0dadcc">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png?v=99839a0dadcc">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=9c6f6a65ca04">
+<link rel="icon" href="icon-192.png?v=99839a0dadcc">
 <style>
   :root { color-scheme: dark; }
 
@@ -412,6 +415,13 @@
   // all; Add to Home Screen, with the manifest and the meta tags above, is
   // its way out of the bars, and on Android it opens with none as well.
   //
+  // LANDSCAPE ALONE (the user, 2026-10-27: "can you force the webpage to only
+  // be landscape mode?"): locked wherever a browser lets a page lock its turn
+  // -- Android's, in fullscreen and opened from the home screen -- at load
+  // when it opens so, and every time it goes fullscreen, the first touch's or
+  // any other. The manifest says landscape too. No browser on an iPhone lets
+  // a page lock it: there the game's own rotate prompt stands.
+  //
   // SDL MUST NOT HEAR OF IT. Emscripten's SDL takes a fullscreenchange it did
   // not ask for as its window gone fullscreen, and from then on drops every
   // resize (Emscripten_HandleResize skips a fullscreen window): the canvas
@@ -430,12 +440,16 @@
         if (turned && turned.catch) turned.catch(function () {});
       } catch (e) { /* no lock here: the rotate prompt stands */ }
     }
+    var installed = !!(window.matchMedia &&
+      window.matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches);
+    if (installed) lockTurn();
     function ask() {
       if (asked || !request) return;
       if (!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
       asked = true;
-      // Opened from the home screen it has no bars to hide already.
-      if (window.matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches) return;
+      // Opened from the home screen it has no bars to hide already: locked
+      // again, a gesture being what some browsers wait for.
+      if (installed) return lockTurn();
       if (document.fullscreenElement || document.webkitFullscreenElement) return;
       try {
         var going = root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" })
@@ -448,7 +462,11 @@
     // handlers still get the touch: nothing here stops or cancels it.
     window.addEventListener("touchend", ask, { capture: true, passive: true });
     ["fullscreenchange", "webkitfullscreenchange"].forEach(function (type) {
-      window.addEventListener(type, function (e) { e.stopImmediatePropagation(); fit(); }, true);
+      window.addEventListener(type, function (e) {
+        e.stopImmediatePropagation();
+        fit();
+        if (document.fullscreenElement || document.webkitFullscreenElement) lockTurn();
+      }, true);
     });
   })();
 
@@ -727,7 +745,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "9c6f6a65ca04"; },
+    locateFile: function (path) { return path + "?v=" + "99839a0dadcc"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -739,6 +757,8 @@
       var text = Array.prototype.join.call(arguments, " ");
       // The game's word that it wrote a save or a setting: a copy, not a log.
       if (text === SAVES_WRITTEN) return persistAfterWrite();
+      // The game's word that it has seen the update and saved: go to it.
+      if (text.indexOf(UPDATE_MARK) === 0) return goToUpdate(text.slice(UPDATE_MARK.length));
       // Its first screen built: the loading screen may go.
       if (!shown && text.indexOf("scene rebuilt") !== -1) showGame();
       console.log(text);
@@ -816,8 +836,8 @@
   // LAN at http://<ip>:8080; only localhost is let off), a private window in
   // Firefox -- nothing changes: the game loads from the network as it always
   // did.
-  var BUILD = "9c6f6a65ca04";
-  var KEEP = [{"url": "game.data?v=9c6f6a65ca04", "sha256": "f419492cc368d4191e9c953aacb3e54ea42e8ffff4a62f6ac27735e7354e4ccb"}, {"url": "love.wasm?v=9c6f6a65ca04", "sha256": "ecc9e098bb8af918d20fbe3f26d23495c5184ff6b5d203d2e4b27bf17a771d6f"}, {"url": "love.js?v=9c6f6a65ca04", "sha256": "12db012a5cf4e0661f9eaf154c4c10c3cba7a7db31e6a36856028bbaf5f942f0"}, {"url": "game.js?v=9c6f6a65ca04", "sha256": "5c0011702d0c5aeb824987cd0284df9f093e23e135dab9b0aaef61b50d499eea"}, {"url": "manifest.webmanifest?v=9c6f6a65ca04", "sha256": "1db6379813c09bd162d8d20a8fcbc17cbab70b2d71d6bd57fecaaa136003ec43"}, {"url": "icon-180.png?v=9c6f6a65ca04", "sha256": "a80c84237d85a8a32187242d206e68cccee1497c592e9a220292f907e171733e"}, {"url": "icon-192.png?v=9c6f6a65ca04", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-192.png?v=c41226cb90f1", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-512.png?v=b6b28b0a6bdc", "sha256": "b6b28b0a6bdc85ea61cd1f3a7bca480a513b3d1a99169df705fff0ebfc13fba3"}];
+  var BUILD = "99839a0dadcc";
+  var KEEP = [{"url": "game.data?v=99839a0dadcc", "sha256": "891669d652172eeaaf778deaaeb3a4651e1ca9ef4d921df098f094ceffd14400"}, {"url": "love.wasm?v=99839a0dadcc", "sha256": "ecc9e098bb8af918d20fbe3f26d23495c5184ff6b5d203d2e4b27bf17a771d6f"}, {"url": "love.js?v=99839a0dadcc", "sha256": "12db012a5cf4e0661f9eaf154c4c10c3cba7a7db31e6a36856028bbaf5f942f0"}, {"url": "game.js?v=99839a0dadcc", "sha256": "0d71c8a4cbd89196998d611271e4897e5f170b2fa37a20b8f7790d0d85167b82"}, {"url": "manifest.webmanifest?v=99839a0dadcc", "sha256": "1db6379813c09bd162d8d20a8fcbc17cbab70b2d71d6bd57fecaaa136003ec43"}, {"url": "icon-180.png?v=99839a0dadcc", "sha256": "a80c84237d85a8a32187242d206e68cccee1497c592e9a220292f907e171733e"}, {"url": "icon-192.png?v=99839a0dadcc", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-192.png?v=c41226cb90f1", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-512.png?v=b6b28b0a6bdc", "sha256": "b6b28b0a6bdc85ea61cd1f3a7bca480a513b3d1a99169df705fff0ebfc13fba3"}];
   function keepOffline() {
     var workers = navigator.serviceWorker;
     if (workers) {
@@ -845,6 +865,67 @@
     // this one left there (tools/build_web.py, drop_preload_cache): 18 MB
     // that nothing reads now.
     try { if (window.indexedDB) window.indexedDB.deleteDatabase("EM_PRELOAD_CACHE"); } catch (e) {}
+
+    // And from now on, the updates (below).
+    setTimeout(checkForUpdate, UPDATE_FIRST);
+    setInterval(checkForUpdate, UPDATE_EVERY);
+    window.addEventListener("online", checkForUpdate);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
+  }
+
+  // A NEWER BUILD, GONE TO (the user, 2026-10-27: "check for updates if
+  // online, if so make it update"). The page is the network's first at every
+  // load (sw.js), but a game left open on a phone -- in a tab or from the home
+  // screen, put away and brought back -- runs the build it opened with for
+  // as long as it is open. So while online the page asks the site for its
+  // page -- a few seconds after the game is up, whenever it is brought back
+  // into view or the network comes back, and every ten minutes -- and reads
+  // the build its page names. A newer one is told to the game, which alone
+  // knows whether a run is going: a file in its save directory, `update_ready`
+  // holding the new build's stamp (src/core/update.lua), the one way in that
+  // Lua can read. The game saves the run, leaves word to carry it on, and
+  // prints UPDATE_MARK and the stamp; the page copies the saves to IndexedDB,
+  // waits for the copy to land, and loads again -- the new build, from the
+  // network, which carries the run on (update.lua's resume).
+  var UPDATE_MARK = "@@minioutbreak-update@@";
+  var SAVE_HOME = SAVE_DB + "/minioutbreak";      // conf.lua's identity
+  var UPDATE_FIRST = 8000, UPDATE_EVERY = 10 * 60 * 1000;
+  var updateAsked = false, updating = false;
+  function checkForUpdate() {
+    if (updateAsked || updating || navigator.onLine === false || !window.fetch) return;
+    if (!(Module.calledRun && Module.FS_createDataFile)) return;
+    updateAsked = true;
+    fetch("./", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.text() : "";
+    }).then(function (html) {
+      var found = /game\.js\?v=([0-9a-f]+)/.exec(html || "");
+      if (!found || found[1] === BUILD) return;
+      try { Module.FS_unlink(SAVE_HOME + "/update_ready"); } catch (e) { /* none there */ }
+      Module.FS_createDataFile(SAVE_HOME, "update_ready", found[1], true, true);
+    }).catch(function (e) {
+      // Offline after all, or the site down: asked again at the next turn.
+    }).then(function () { updateAsked = false; });
+  }
+  window.checkForUpdate = checkForUpdate;   // for a probe to ask at once
+
+  // The game has saved: the copy to IndexedDB asked for and waited out --
+  // the frame its write asks for one, and every transaction of it -- and then
+  // the page loaded again. Five seconds at most: a copy that never ends must
+  // not keep an update off for good. Not for this build's own stamp, which a
+  // flag left over from before the last update can still carry.
+  function goToUpdate(stamp) {
+    if (updating || !stamp || stamp === BUILD) return;
+    updating = true;
+    var started = Date.now();
+    persistSaves();
+    (function settled() {
+      if ((frameAsked || copyOpen > 0 || copyWanted) && Date.now() - started < 5000) {
+        return setTimeout(settled, 100);
+      }
+      window.location.reload();
+    })();
   }
 
   Module.setStatus("Loading");
@@ -879,7 +960,7 @@
 })();
 </script>
 
-<script src="game.js?v=9c6f6a65ca04"></script>
-<script async src="love.js?v=9c6f6a65ca04" onload="applicationLoad()"></script>
+<script src="game.js?v=99839a0dadcc"></script>
+<script async src="love.js?v=99839a0dadcc" onload="applicationLoad()"></script>
 </body>
 </html>
