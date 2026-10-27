@@ -248,30 +248,8 @@ Module.expectedDataFileDownloads++;
         fetchRemotePackage(REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE, processPackageData, handleError);
       };
 
-      openDatabase(
-        function(db) {
-          checkCachedPackage(db, PACKAGE_PATH + PACKAGE_NAME,
-            function(useCached) {
-              Module.preloadResults[PACKAGE_NAME] = {fromCache: useCached};
-              if (useCached) {
-                console.info('loading ' + PACKAGE_NAME + ' from cache');
-                fetchCachedPackage(db, PACKAGE_PATH + PACKAGE_NAME, processPackageData, preloadFallback);
-              } else {
-                console.info('loading ' + PACKAGE_NAME + ' from remote');
-                fetchRemotePackage(REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE,
-                  function(packageData) {
-                    cacheRemotePackage(db, PACKAGE_PATH + PACKAGE_NAME, packageData, {uuid:PACKAGE_UUID}, processPackageData,
-                      function(error) {
-                        console.error(error);
-                        processPackageData(packageData);
-                      });
-                  }
-                  , preloadFallback);
-              }
-            }
-            , preloadFallback);
-        }
-        , preloadFallback);
+      Module.preloadResults[PACKAGE_NAME] = {fromCache: false};
+      fetchRemotePackage(REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE, processPackageData, handleError);
 
       if (Module['setStatus']) Module['setStatus']('Downloading...');
 
@@ -284,6 +262,6 @@ Module.expectedDataFileDownloads++;
     }
 
   }
-  loadPackage({"package_uuid":"b846e1c7-bc9e-f661-2054-1442cec304e6","remote_package_size":19233255,"files":[{"filename":"/game.love","crunched":0,"start":0,"end":19233255,"audio":false}]});
+  loadPackage({"package_uuid":"f419492c-c368-d419-1e9c-953aacb3e54e","remote_package_size":19532011,"files":[{"filename":"/game.love","crunched":0,"start":0,"end":19532011,"audio":false}]});
 
 })();

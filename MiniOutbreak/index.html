@@ -3,10 +3,11 @@
   Page shell for the browser build. Replaces the stock love.js template, which
   ships an <h1>, a footer credit and a fixed-size canvas that gets cropped.
 
-  Three values are substituted by tools/build_web.py before this is written out:
+  Four values are substituted by tools/build_web.py before this is written out:
     MiniOutbreak          the window title
     536870912 the WASM heap size, which must match what love.js was built with
-    cee89f6b25fe          a hash of the shipped files, so a rebuild is never served from cache
+    9c6f6a65ca04          a hash of the shipped files, so a rebuild is never served from cache
+    __KEEP__           those files and their SHA-256s, for the offline copy (sw.js)
 
   What this adds over the stock template:
     - the canvas is pinned to the visible viewport's top-left at its size,
@@ -25,6 +26,8 @@
     - audio started on the first gesture the browser counts, a finger's included
     - the save directory copied to IndexedDB whenever the game writes to it,
       not only when the page is left the way a desktop leaves it
+    - the game kept for offline play by a service worker, sw.js beside this,
+      once it has run online, and opened from it with no network
 -->
 <html lang="en">
 <head>
@@ -42,13 +45,13 @@
      26.5); the first touch asks for fullscreen too, below. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MiniOutbreak">
-<link rel="manifest" href="manifest.webmanifest?v=cee89f6b25fe">
-<link rel="apple-touch-icon" href="icon-192.png?v=cee89f6b25fe">
+<link rel="manifest" href="manifest.webmanifest?v=9c6f6a65ca04">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png?v=9c6f6a65ca04">
 <title>MiniOutbreak</title>
 <!-- The icon named, said out loud: without a line for it every load asks the
      server for /favicon.ico and logs its 404 as a console error, which was
      the one error a clean boot printed. -->
-<link rel="icon" href="icon-192.png?v=cee89f6b25fe">
+<link rel="icon" href="icon-192.png?v=9c6f6a65ca04">
 <style>
   :root { color-scheme: dark; }
 
@@ -724,7 +727,7 @@
   // locateFile is what Emscripten asks for the package and wasm URLs
   // (see game.js, REMOTE_PACKAGE_NAME), so this reaches both.
   window.Module = {
-    locateFile: function (path) { return path + "?v=" + "cee89f6b25fe"; },
+    locateFile: function (path) { return path + "?v=" + "9c6f6a65ca04"; },
     arguments: ["./game.love"],
     INITIAL_MEMORY: 536870912,
     canvas: canvas,
@@ -784,6 +787,7 @@
   function showGame() {
     if (shown) return;
     shown = true;
+    keepOffline();
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
         loading.classList.add("done");
@@ -792,6 +796,55 @@
         setTimeout(focusCanvas, 60);
       });
     });
+  }
+
+  // THE GAME OFFLINE (the user, 2026-10-27: "make the game cache-able via
+  // android and apple's guidelines so it can load the game offline"). Once
+  // the game is on the canvas -- every file it needs fetched, and run -- the
+  // page registers sw.js, the service worker beside it, and hands it this
+  // build's files and their SHA-256s to keep. From then on the page opens
+  // with no network, from the last build that ran; sw.js says how, and why
+  // only a build that ran.
+  //
+  // Registered now, never at load: a worker installed while the game was
+  // still downloading would fetch the same 24 MB beside it, where now it
+  // finds them in the browser's own cache. Every load after the first is the
+  // worker's from its start, and a new build streams into its cache as it
+  // downloads.
+  //
+  // Where there is no worker -- a page not served over HTTPS (a phone on the
+  // LAN at http://<ip>:8080; only localhost is let off), a private window in
+  // Firefox -- nothing changes: the game loads from the network as it always
+  // did.
+  var BUILD = "9c6f6a65ca04";
+  var KEEP = [{"url": "game.data?v=9c6f6a65ca04", "sha256": "f419492cc368d4191e9c953aacb3e54ea42e8ffff4a62f6ac27735e7354e4ccb"}, {"url": "love.wasm?v=9c6f6a65ca04", "sha256": "ecc9e098bb8af918d20fbe3f26d23495c5184ff6b5d203d2e4b27bf17a771d6f"}, {"url": "love.js?v=9c6f6a65ca04", "sha256": "12db012a5cf4e0661f9eaf154c4c10c3cba7a7db31e6a36856028bbaf5f942f0"}, {"url": "game.js?v=9c6f6a65ca04", "sha256": "5c0011702d0c5aeb824987cd0284df9f093e23e135dab9b0aaef61b50d499eea"}, {"url": "manifest.webmanifest?v=9c6f6a65ca04", "sha256": "1db6379813c09bd162d8d20a8fcbc17cbab70b2d71d6bd57fecaaa136003ec43"}, {"url": "icon-180.png?v=9c6f6a65ca04", "sha256": "a80c84237d85a8a32187242d206e68cccee1497c592e9a220292f907e171733e"}, {"url": "icon-192.png?v=9c6f6a65ca04", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-192.png?v=c41226cb90f1", "sha256": "c41226cb90f140bfd31bf84818409beae283c41b4f794bd02a849aa57ee75ce3"}, {"url": "icon-512.png?v=b6b28b0a6bdc", "sha256": "b6b28b0a6bdc85ea61cd1f3a7bca480a513b3d1a99169df705fff0ebfc13fba3"}];
+  function keepOffline() {
+    var workers = navigator.serviceWorker;
+    if (workers) {
+      workers.register("sw.js").then(function () {
+        return workers.ready;
+      }).then(function (registration) {
+        registration.active.postMessage({ type: "keep", build: BUILD, files: KEEP });
+      }).catch(function (e) {
+        console.warn("no offline copy: " + e);
+      });
+    }
+
+    // KEPT WHEN SPACE RUNS LOW, and the saves with it: a browser may clear a
+    // site's storage to make room unless it is marked persistent. Asked only
+    // of a game opened from the home screen, which Chrome and Safari answer
+    // for themselves; Firefox asks the player in a bar, which a tab is not
+    // worth.
+    var installed = navigator.standalone === true || !!(window.matchMedia &&
+      window.matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches);
+    if (installed && navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(function () {});
+    }
+
+    // love.js's own copy of game.data, in IndexedDB, which a build before
+    // this one left there (tools/build_web.py, drop_preload_cache): 18 MB
+    // that nothing reads now.
+    try { if (window.indexedDB) window.indexedDB.deleteDatabase("EM_PRELOAD_CACHE"); } catch (e) {}
   }
 
   Module.setStatus("Loading");
@@ -826,7 +879,7 @@
 })();
 </script>
 
-<script src="game.js?v=cee89f6b25fe"></script>
-<script async src="love.js?v=cee89f6b25fe" onload="applicationLoad()"></script>
+<script src="game.js?v=9c6f6a65ca04"></script>
+<script async src="love.js?v=9c6f6a65ca04" onload="applicationLoad()"></script>
 </body>
 </html>
